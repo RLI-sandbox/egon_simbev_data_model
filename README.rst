@@ -112,7 +112,7 @@ If you want to setup a development environment, use ``poetry`` instead:
     $ pipx install poetry
 
     $ # Clone repository
-    $ git clone https://github.com/khelfen/egon-simbev-data-model.git
+    $ git clone git@github.com:RLI-sandbox/egon_simbev_data_model.git
     $ cd egon-simbev-data-model/
 
     $ # Install dependencies and hooks
