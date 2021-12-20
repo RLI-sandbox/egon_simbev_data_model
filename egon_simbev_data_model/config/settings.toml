@@ -1,0 +1,26 @@
+[directories]
+simbev_data_dir= "/home/kilian/Documents/git/github/simbev/simbev/res/default_multi_2021-12-17_071143_simbev_run"
+results_dir = "../res/"
+
+[debugging]
+debug_level = "DEBUG"
+
+[multiprocessing]
+num_threads = 1
+
+[memory_management]
+reduce_memory = true
+
+[random_state]
+seed = 5
+
+# TODO: anpassen, sobald public und private von SimBEV ausgegeben werden
+[flex_share]
+0_work = 1
+1_business = 0
+2_school = 0
+3_shopping = 0
+4_private_ridesharing = 0
+5_leisure = 0
+6_home = 1
+7_charging_hub = 0
