@@ -4,12 +4,16 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from setuptools import find_packages, setup
 
-with open("README.rst", encoding="utf-8") as readme_file:
+file_path = Path(__file__).parent.resolve()
+
+with open(file_path / "README.rst", encoding="utf-8") as readme_file:
     readme = readme_file.read()
 
-with open("HISTORY.rst", encoding="utf-8") as history_file:
+with open(file_path / "HISTORY.rst", encoding="utf-8") as history_file:
     history = history_file.read()
 
 requirements: list[str] = [

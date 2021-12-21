@@ -11,6 +11,7 @@ Welcome to EGON_SIMBEV_DATA_MODEL's documentation!
    contributing
    authors
    history
+   modules
 
    autoapi/index
 

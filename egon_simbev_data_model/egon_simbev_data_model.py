@@ -1,3 +1,4 @@
+import json
 import multiprocessing
 import sys
 
@@ -125,7 +126,7 @@ def simbev_data(
     scenario_files = []
 
     # iterate over all regions
-    for region_path in simbev_data_dir.iterdir():
+    for region_path in simbev_data_dir.iterdir():  # type:ignore
         assert region_path.is_dir()
 
         scenario_files.extend(list(region_path.iterdir()))
@@ -136,6 +137,7 @@ def simbev_data(
         df = pd.read_csv(f, index_col=0)
 
         # only keep rows with a charging event
+        # pylint: disable=E1101
         df = df.loc[df.chargingdemand > 0]
 
         df = df.assign(ev_id=count)
@@ -149,10 +151,25 @@ def simbev_data(
     return dummy_df
 
 
+def generate_dsm_profile(
+    restriction_time: int,
+    min_soc: float,
+    timestep_count: int,
+) -> pd.DataFrame:
+    dsm_profile_week = np.zeros((24 * 7,))
+    dsm_profile_week[(np.arange(0, 7, 1) * 24 + restriction_time)] = min_soc
+    weeks, rest = divmod(timestep_count, len(dsm_profile_week))
+    dsm_profile = np.concatenate(
+        (np.tile(dsm_profile_week, weeks), dsm_profile_week[0:rest])
+    )
+
+    return pd.DataFrame({"min_soc": dsm_profile})
+
+
 def static_params(
     ev_data_df: pd.DataFrame,
     region: Union[int, str],
-) -> pd.DataFrame:
+) -> dict:
     """Calculate static parameters from SimBEV data.
     # TODO: anpassen, sobald neuer SimBEV release
 
@@ -161,7 +178,8 @@ def static_params(
     :param region: Region key
     :type region: int or str
 
-    :return: pandas DataFrame containing static parameters.
+    :return: Dictionary containing static parameters.
+    :rtype: dict
     """
     max_df = (
         ev_data_df[["ev_id", "bat_cap", "brutto_charging_capacity"]]
@@ -169,14 +187,15 @@ def static_params(
         .max()
     )
 
-    static_params = {
-        "total_bat_cap": max_df.bat_cap.sum() / 1000,
-        "max_charging_capacity": max_df.brutto_charging_capacity.sum(),
+    static_params_dict = {
+        "store_ev_battery.e_nom_MWh": float(max_df.bat_cap.sum() / 1000),
+        "link_bev_charger.p_nom_MW": float(max_df.brutto_charging_capacity.sum()),
+        "store_ev_battery.e_max_pu": 1,
     }
 
     logger.debug(f"Calculated static parameters for region {region}.")
 
-    return pd.DataFrame.from_dict(static_params, orient="index")
+    return static_params_dict
 
 
 def load_time_series(
@@ -288,7 +307,7 @@ def data_preprocessing(
     scenario_data = scenario_data.loc[scenario_data.mv_grid_id == region]
 
     # count profiles to respect profiles which are used multiple times
-    count_profiles = Counter(scenario_data.ev_id)
+    count_profiles = Counter(scenario_data.ev_id)  # type: dict
 
     max_duplicates = max(count_profiles.values())
 
@@ -367,14 +386,15 @@ def data_preprocessing(
 
 
 def export_results(
-    static_params_df: pd.DataFrame,
+    static_params_dict: dict,
     load_time_series_df: pd.DataFrame,
+    dsm_profile_df: pd.DataFrame,
     region: Union[int, str],
 ) -> None:
     """Export all results as CSVs and add Metadata JSON.
 
-    :param static_params_df: pandas DataFrame containing static parameters.
-    :type static_params_df: pandas.DataFrame
+    :param static_params_dict: Dictionary containing static parameters.
+    :type static_params_dict: dict
     :param load_time_series_df: pandas DataFrame containing time series of the
     load and the flex potential
     :type load_time_series_df: pandas.DataFrame
@@ -382,18 +402,45 @@ def export_results(
     :type region: int or str
     """
     load_time_series_df = load_time_series_df.assign(
-        normed_flex_time_series=(
+        ev_availability=(
             load_time_series_df.flex_time_series
-            / static_params_df.at["max_charging_capacity", 0]
+            / static_params_dict["link_bev_charger.p_nom_MW"]
         )
     )
 
     results_dir = Path(settings.directories["results_dir"]) / str(region)
 
-    results_dir.mkdir(exist_ok=True)
+    results_dir.mkdir(exist_ok=True, parents=True)
 
-    static_params_df.to_csv(results_dir / "static_parameters.csv")
-    load_time_series_df.to_csv(results_dir / "load_time_series.csv")
+    hourly_load_time_series_df = load_time_series_df.resample("1H").mean()
+
+    if len(hourly_load_time_series_df) >= len(dsm_profile_df):
+        hourly_load_time_series_df = hourly_load_time_series_df.iloc[
+            : len(dsm_profile_df)
+        ]
+    else:
+        dsm_profile_df = dsm_profile_df.iloc[: len(hourly_load_time_series_df)]
+
+    dsm_profile_df.index = hourly_load_time_series_df.index
+
+    hourly_load_time_series_df[["load_time_series"]].to_csv(
+        results_dir / "ev_load_time_series.csv"
+    )
+
+    hourly_load_time_series_df[["ev_availability"]].to_csv(
+        results_dir / "ev_availability.csv"
+    )
+
+    dsm_profile_df.to_csv(results_dir / "ev_dsm_profile.csv")
+
+    static_params_dict["load_land_transport_ev.p_set_MW"] = "ev_load_time_series.csv"
+    static_params_dict["link_bev_charger.p_max_pu"] = "ev_availability.csv"
+    static_params_dict["store_ev_battery.e_min_pu"] = "ev_dsm_profile.csv"
+
+    file = results_dir / "ev_static_params.json"
+
+    with open(file, "w") as f:
+        json.dump(static_params_dict, f, indent=4)
 
 
 def calculate_scenario(
@@ -416,11 +463,17 @@ def calculate_scenario(
     """
     ev_data_df = data_preprocessing(scenario_data, ev_data_df, simbev_cfg_dict, region)
 
-    static_params_df = static_params(ev_data_df, region)
+    static_params_dict = static_params(ev_data_df, region)
 
     load_time_series_df = load_time_series(ev_data_df, simbev_cfg_dict, region)
 
-    export_results(static_params_df, load_time_series_df, region)
+    dsm_profile_df = generate_dsm_profile(
+        restriction_time=settings.dsm_profile["restriction_time"],
+        min_soc=settings.dsm_profile["min_soc"],
+        timestep_count=settings.dsm_profile["timestep_count"],
+    )
+
+    export_results(static_params_dict, load_time_series_df, dsm_profile_df, region)
 
 
 def run_egon_simbev_data_model() -> None:

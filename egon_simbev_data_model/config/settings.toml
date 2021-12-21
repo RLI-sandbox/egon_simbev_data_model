@@ -6,7 +6,7 @@ results_dir = "../res/"
 debug_level = "DEBUG"
 
 [multiprocessing]
-num_threads = 1
+num_threads = 2
 
 [memory_management]
 reduce_memory = true
@@ -24,3 +24,8 @@ seed = 5
 5_leisure = 0
 6_home = 1
 7_charging_hub = 0
+
+[dsm_profile]
+restriction_time = 7
+min_soc = 0.75
+timestep_count = 8760

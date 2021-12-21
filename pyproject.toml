@@ -53,6 +53,7 @@ pytest-xdist = "^2.2.1"
 Sphinx = "^3.5.4"
 sphinx-autoapi = "^1.8.1"
 pyupgrade = "^2.29.1"
+nbsphinx = "^0.8.7"
 
 [tool.poetry.scripts]
 egon_simbev_data_model = "egon_simbev_data_model.cli:main"
