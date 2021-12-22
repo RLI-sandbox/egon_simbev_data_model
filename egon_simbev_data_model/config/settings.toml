@@ -1,5 +1,5 @@
 [directories]
-simbev_data_dir= "/home/kilian/Documents/git/github/simbev/simbev/res/default_multi_2021-12-17_071143_simbev_run"
+simbev_data_dir= "/home/kilian/Documents/git/github/simbev/simbev/res/default_multi_2021-12-22_083802_simbev_run"
 results_dir = "../res/"
 
 [debugging]
@@ -29,3 +29,7 @@ seed = 5
 restriction_time = 7
 min_soc = 0.75
 timestep_count = 8760
+
+[simbev_config]
+timestep = "15Min"
+start_date = "2018-01-01"

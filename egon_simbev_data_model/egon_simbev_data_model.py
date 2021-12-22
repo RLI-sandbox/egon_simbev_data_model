@@ -1,5 +1,6 @@
 import json
 import multiprocessing
+import re
 import sys
 
 from collections import Counter
@@ -96,16 +97,12 @@ def egon_scenario(
 def simbev_config() -> dict:
     """
     TODO: Add this function as soon as SimBEV provides config data as output.
-     Until then add your config settings here by hand
+     Until then add your config settings by hand (settings.toml)
 
     :return: Dict containing simbev config data
     :rtype: dict
     """
-    simbev_config_dict = {
-        "eta_cp": 1,
-        "timestep": "15Min",
-        "start_date": "2018-01-01",
-    }
+    simbev_config_dict = dict(settings.simbev_config)
 
     logger.debug("Loaded simbev config data.")
 
@@ -126,7 +123,7 @@ def simbev_data(
     scenario_files = []
 
     # iterate over all regions
-    for region_path in simbev_data_dir.iterdir():  # type:ignore
+    for region_path in simbev_data_dir.iterdir():  # type: ignore
         assert region_path.is_dir()
 
         scenario_files.extend(list(region_path.iterdir()))
@@ -134,13 +131,14 @@ def simbev_data(
     dummy_df = pd.DataFrame()
 
     for count, f in enumerate(scenario_files):
-        df = pd.read_csv(f, index_col=0)
+        df = pd.read_csv(f, index_col=0)  # type: pd.DataFrame
 
         # only keep rows with a charging event
-        # pylint: disable=E1101
-        df = df.loc[df.chargingdemand > 0]
+        df = df.loc[df.chargingdemand_kWh > 0]  # pylint: disable=E1101
 
-        df = df.assign(ev_id=count)
+        bat_cap = int(re.findall(r"(\d+(?:\.\d+)?)kWh", f.parts[-1])[0])
+
+        df = df.assign(ev_id=count, bat_cap=bat_cap)
 
         dummy_df = dummy_df.append(df, ignore_index=True)
 
@@ -171,7 +169,6 @@ def static_params(
     region: Union[int, str],
 ) -> dict:
     """Calculate static parameters from SimBEV data.
-    # TODO: anpassen, sobald neuer SimBEV release
 
     :param ev_data_df: DataFrame containing all SimBEV data.
     :type ev_data_df: pandas.DataFrame
@@ -182,14 +179,14 @@ def static_params(
     :rtype: dict
     """
     max_df = (
-        ev_data_df[["ev_id", "bat_cap", "brutto_charging_capacity"]]
+        ev_data_df[["ev_id", "bat_cap", "grid_charging_capacity_MW"]]
         .groupby("ev_id")
         .max()
     )
 
     static_params_dict = {
-        "store_ev_battery.e_nom_MWh": float(max_df.bat_cap.sum() / 1000),
-        "link_bev_charger.p_nom_MW": float(max_df.brutto_charging_capacity.sum()),
+        "store_ev_battery.e_nom_MWh": float(max_df.bat_cap.sum() / 10 ** 3),
+        "link_bev_charger.p_nom_MW": float(max_df.grid_charging_capacity_MW.sum()),
         "store_ev_battery.e_max_pu": 1,
     }
 
@@ -236,20 +233,18 @@ def load_time_series(
     flex_time_series_array = load_time_series_array.copy()
 
     columns = [
-        "location",
-        "park_start",
+        "park_start_timesteps",
         "charge_end",
-        "brutto_charging_capacity",
+        "grid_charging_capacity_MW",
         "last_timestep",
-        "last_timestep_brutto_charging_capacity",
-        "flex_brutto_charging_capacity",
-        "flex_last_timestep_brutto_charging_capacity",
+        "last_timestep_grid_charging_capacity_MW",
+        "flex_grid_charging_capacity_MW",
+        "flex_last_timestep_grid_charging_capacity_MW",
     ]
 
     # iterate over charging events
     for (
         _,
-        location,
         start,
         end,
         cap,
@@ -271,7 +266,12 @@ def load_time_series(
 
     np.testing.assert_almost_equal(
         load_time_series_df.load_time_series.sum() / 4,
-        ev_data_df.chargingdemand.sum() / 1000,
+        ev_data_df.chargingdemand_kWh.sum()
+        / 1000
+        / (
+            ev_data_df.nominal_charging_capacity_kW
+            / ev_data_df.grid_charging_capacity_kW
+        ).mean(),
         decimal=4,
     )
 
@@ -315,7 +315,9 @@ def data_preprocessing(
     ev_data_df = ev_data_df.loc[ev_data_df.ev_id.isin(scenario_data.ev_id.unique())]
 
     # drop faulty data
-    ev_data_df = ev_data_df.loc[ev_data_df.park_start < ev_data_df.park_end]
+    ev_data_df = ev_data_df.loc[
+        ev_data_df.park_start_timesteps < ev_data_df.park_end_timesteps
+    ]
 
     if max_duplicates >= 2:
         # duplicate profiles if necessary
@@ -326,18 +328,18 @@ def data_preprocessing(
 
             duplicates_df = temp.loc[temp.ev_id.isin(duplicates)]
 
-            duplicates_df.ev_id = duplicates_df.ev_id.astype(str) + f"_{count}"
+            duplicates_df = duplicates_df.assign(
+                ev_id=duplicates_df.ev_id.astype(str) + f"_{count}"
+            )
 
             ev_data_df = ev_data_df.append(duplicates_df)
 
     # calculate time necessary to fulfill the charging demand and brutto
     # charging capacity in mva
     ev_data_df = ev_data_df.assign(
-        brutto_charging_capacity=(
-            ev_data_df.netto_charging_capacity / simbev_cfg_dict["eta_cp"] / 10 ** 3
-        ),
+        grid_charging_capacity_MW=(ev_data_df.grid_charging_capacity_kW / 10 ** 3),
         minimum_charging_time=(
-            ev_data_df.chargingdemand / ev_data_df.netto_charging_capacity * 4
+            ev_data_df.chargingdemand_kWh / ev_data_df.nominal_charging_capacity_kW * 4
         ),
         location=ev_data_df.location.str.replace("/", "_"),
     )
@@ -353,28 +355,26 @@ def data_preprocessing(
     ev_data_df = ev_data_df.assign(
         full_timesteps=full_timesteps,
         last_timestep_share=last_timestep_share,
-        last_timestep_netto_charging_capacity=(
-            last_timestep_share * ev_data_df.netto_charging_capacity
+        last_timestep_grid_charging_capacity_MW=(
+            last_timestep_share * ev_data_df.grid_charging_capacity_MW
         ),
-        last_timestep_brutto_charging_capacity=(
-            last_timestep_share * ev_data_df.brutto_charging_capacity
-        ),
-        charge_end=ev_data_df.park_start + full_timesteps,
-        last_timestep=ev_data_df.park_start + full_timesteps + 1,
+        charge_end=ev_data_df.park_start_timesteps + full_timesteps,
+        last_timestep=ev_data_df.park_start_timesteps + full_timesteps + 1,
     )
 
     # calculate flexible charging capacity
-    # TODO: anpassen bei neuer SimBEV Version
+    # TODO: change this when SimBEV issue #33 is solved
+    #  https://github.com/rl-institut/simbev/issues/33
     flex_dict = dict(settings.flex_share)
 
     flex_share = ev_data_df.location.map(flex_dict)
 
     ev_data_df = ev_data_df.assign(
-        flex_brutto_charging_capacity=(
-            ev_data_df.brutto_charging_capacity * flex_share
+        flex_grid_charging_capacity_MW=(
+            ev_data_df.grid_charging_capacity_MW * flex_share
         ),
-        flex_last_timestep_brutto_charging_capacity=(
-            ev_data_df.last_timestep_brutto_charging_capacity * flex_share
+        flex_last_timestep_grid_charging_capacity_MW=(
+            ev_data_df.last_timestep_grid_charging_capacity_MW * flex_share
         ),
     )
 
