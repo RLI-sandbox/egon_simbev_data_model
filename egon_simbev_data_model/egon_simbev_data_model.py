@@ -166,12 +166,16 @@ def generate_dsm_profile(
 
 def static_params(
     ev_data_df: pd.DataFrame,
+    load_time_series_df: pd.DataFrame,
     region: Union[int, str],
 ) -> dict:
     """Calculate static parameters from SimBEV data.
 
     :param ev_data_df: DataFrame containing all SimBEV data.
     :type ev_data_df: pandas.DataFrame
+    :param load_time_series_df: pandas DataFrame containing time series of the
+    load and the flex potential
+    :type load_time_series_df: pandas.DataFrame
     :param region: Region key
     :type region: int or str
 
@@ -186,7 +190,9 @@ def static_params(
 
     static_params_dict = {
         "store_ev_battery.e_nom_MWh": float(max_df.bat_cap.sum() / 10 ** 3),
-        "link_bev_charger.p_nom_MW": float(max_df.grid_charging_capacity_MW.sum()),
+        "link_bev_charger.p_nom_MW": float(
+            load_time_series_df.simultaneous_plugged_in_charging_capacity.max()
+        ),
         "store_ev_battery.e_max_pu": 1,
     }
 
@@ -231,6 +237,7 @@ def load_time_series(
 
     load_time_series_array = np.zeros(len(load_time_series_df))
     flex_time_series_array = load_time_series_array.copy()
+    simultaneous_plugged_in_charging_capacity = load_time_series_array.copy()
 
     columns = [
         "park_start_timesteps",
@@ -240,6 +247,7 @@ def load_time_series(
         "last_timestep_grid_charging_capacity_MW",
         "flex_grid_charging_capacity_MW",
         "flex_last_timestep_grid_charging_capacity_MW",
+        "park_end_timesteps",
     ]
 
     # iterate over charging events
@@ -252,6 +260,7 @@ def load_time_series(
         last_ts_cap,
         flex_cap,
         flex_last_ts_cap,
+        park_end,
     ) in ev_data_df[columns].itertuples():
         load_time_series_array[start:end] += cap
         load_time_series_array[last_ts] += last_ts_cap
@@ -259,9 +268,14 @@ def load_time_series(
         flex_time_series_array[start:end] += flex_cap
         flex_time_series_array[last_ts] += flex_last_ts_cap
 
+        simultaneous_plugged_in_charging_capacity[start:park_end] += cap
+
     load_time_series_df = load_time_series_df.assign(
         load_time_series=load_time_series_array,
         flex_time_series=flex_time_series_array,
+        simultaneous_plugged_in_charging_capacity=(
+            simultaneous_plugged_in_charging_capacity
+        ),
     )
 
     np.testing.assert_almost_equal(
@@ -463,9 +477,9 @@ def calculate_scenario(
     """
     ev_data_df = data_preprocessing(scenario_data, ev_data_df, simbev_cfg_dict, region)
 
-    static_params_dict = static_params(ev_data_df, region)
-
     load_time_series_df = load_time_series(ev_data_df, simbev_cfg_dict, region)
+
+    static_params_dict = static_params(ev_data_df, load_time_series_df, region)
 
     dsm_profile_df = generate_dsm_profile(
         restriction_time=settings.dsm_profile["restriction_time"],
