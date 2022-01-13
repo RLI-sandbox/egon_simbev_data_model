@@ -25,8 +25,6 @@ C
 docs/source/conf.py,a/d/aded7756cdea7c289134466a0d54da4f26d43abb
 E
 docs/source/index.rst,6/2/62df078594b947ca6f787a59ae6ddefabce9fcad
-G
-.pre-commit-config.yaml,e/7/e7d14d429f898757a423156de0e8c49d75240694
 ]
 -docs/source/egon_simbev_data_model.config.rst,a/5/a5011783a92990c5363e645d4adc418d5647e339
 9
