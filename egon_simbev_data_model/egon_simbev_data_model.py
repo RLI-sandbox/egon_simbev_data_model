@@ -131,7 +131,7 @@ def simbev_data(
     dummy_df = pd.DataFrame()
 
     for count, f in enumerate(scenario_files):
-        df = pd.read_csv(f, index_col=0)
+        df = pd.read_csv(f, index_col=0)  # type: pd.DataFrame
 
         # only keep rows with a charging event
         df = df.loc[df.chargingdemand_kWh > 0]  # pylint: disable=E1101
